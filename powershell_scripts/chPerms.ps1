@@ -1,104 +1,74 @@
 <#
 .SYNOPSIS
-    Creates a new script file in the specified directory with the appropriate headers.
-
+    Modifies permissions and/or ownership of files and directories.
 .DESCRIPTION
-    This script creates a new script file based on the specified type (PowerShell, Bash, Python, RMarkdown, Markdown, etc.).
-    It adds the appropriate shebang or header information based on the script type.
-
-.PARAMETER Name
-    The name of the script file. If no extension is provided, it will be added based on the selected type.
-
-.PARAMETER Type
-    The type of script to create (e.g., ps1, sh, py, rmd, md, txt). Determines the file extension and any headers.
-
-.PARAMETER ScriptDir
-    The directory where the script will be created. Defaults to "$HOME\powershell_scripts".
-
-.PARAMETER OutputType
-    For RMarkdown, specify the output type (html, docx, pdf, etc.).
-
-.PARAMETER Toc
-    For RMarkdown, specify whether to include a table of contents (true/false).
-
-.PARAMETER Title
-    The title of the document (for RMarkdown).
-
-.PARAMETER Author
-    The author of the document (for RMarkdown).
-
+    Uses icacls and takeown to modify permissions and ownership recursively if specified.
+.PARAMETER Path
+    Target directory path (mandatory, alias: -D)
+.PARAMETER Permissions
+    Permissions to set (alias: -P)
+.PARAMETER Ownership
+    Take ownership (alias: -O)
+.PARAMETER Recursive
+    Apply changes recursively (alias: -R)
 .EXAMPLE
-    .\new_script.ps1 -Name "my_script" -Type "sh"
-
-    Creates a new Bash script named "my_script.sh" with a shebang line.
-
-.EXAMPLE
-    .\new_script.ps1 -Name "analysis" -Type "rmd" -OutputType "pdf" -Title "My Analysis" -Author "John Doe" -Toc $true
-
-    Creates a new RMarkdown document named "analysis.rmd" with the specified metadata.
+    .\Set-Permissions.ps1 -Path "C:\Target" -Permissions "F" -Recursive
+    Grants Full Control permissions recursively (verbose output)
 #>
 
+[CmdletBinding()]
 param (
     [Parameter(Mandatory=$true)]
-    [string]$Name,                # -n | -N | --name
+    [Alias("D")]
+    [string]$Path,
 
-    [string]$Type = "ps1",        # -t | -T | --type
+    [Alias("P")]
+    [string]$Permissions,
 
-    [string]$ScriptDir = "$HOME\powershell_scripts", # Directory where the script will be created
+    [Alias("O")]
+    [switch]$Ownership,
 
-    [string]$OutputType,          # For RMarkdown
-
-    [switch]$Toc,                 # Include Table of Contents (for RMarkdown)
-
-    [string]$Title = "Document Title",  # Title for RMarkdown
-
-    [string]$Author = "Author Name"     # Author for RMarkdown
+    [Alias("R")]
+    [switch]$Recursive
 )
 
-# Ensure script directory exists
-if (-not (Test-Path -Path $ScriptDir -PathType Container)) {
-    New-Item -Path $ScriptDir -ItemType Directory -Force | Out-Null
-}
-
-# Determine the file extension
-switch ($Type.ToLower()) {
-    "ps1" { $extension = ".ps1" }
-    "sh" { $extension = ".sh" }
-    "py" { $extension = ".py" }
-    "rmd" { $extension = ".Rmd" }
-    "md" { $extension = ".md" }
-    "txt" { $extension = ".txt" }
-    default { $extension = ".txt" }
-}
-
-# Full path to the new script
-$scriptPath = Join-Path -Path $ScriptDir -ChildPath "$Name$extension"
-
-# Content based on the type
-$content = switch ($Type.ToLower()) {
-    "ps1" { "# PowerShell script" }
-    "sh" { "#!/bin/bash" }
-    "py" { "#!/usr/bin/env python3" }
-    "rmd" { 
-        $output = if ($OutputType) { $OutputType } else { "html_document" }
-        $tocValue = if ($Toc) { "TRUE" } else { "FALSE" }
-        @"
----
-title: "$Title"
-author: "$Author"
-output:
-  $output:
-    toc: $tocValue
----
-"@
+begin {
+    # Validate path exists
+    if (-not (Test-Path -Path $Path)) {
+        Write-Error "Path '$Path' does not exist"
+        exit 1
     }
-    "md" { "# Markdown document" }
-    "txt" { "# Text document" }
-    default { "# New document" }
+
+    # Get current user for permissions
+    $currentUser = whoami
 }
 
-# Create the script file
-Set-Content -Path $scriptPath -Value $content
+process {
+    try {
+        # Take ownership if requested
+        if ($Ownership) {
+            Write-Host "Taking ownership of $Path..."
+            $takeownArgs = "/F `"$Path`""
+            if ($Recursive) { $takeownArgs += " /R" }
+            $takeownArgs += " /A /D Y"
+            
+            Start-Process "takeown.exe" -ArgumentList $takeownArgs -Wait -NoNewWindow
+        }
 
-Write-Host "Created script at '$scriptPath'."
+        # Set permissions if requested
+        if ($Permissions) {
+            Write-Host "Setting permissions on $Path..."
+            $icaclsArgs = "`"$Path`" /grant `"$($currentUser):(OI)(CI)$Permissions`""
+            if ($Recursive) { $icaclsArgs += " /T" }
+            $icaclsArgs += " /C"  # Removed /Q for verbose output
+            
+            Start-Process "icacls.exe" -ArgumentList $icaclsArgs -Wait -NoNewWindow
+        }
 
+        Write-Host "Operation completed successfully." -ForegroundColor Green
+    }
+    catch {
+        Write-Error "An error occurred: $_"
+        exit 1
+    }
+}
